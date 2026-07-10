@@ -23,11 +23,32 @@ const urlB64ToUint8 = (b64) => {
   const raw = window.atob(base64)
   return new Uint8Array([...raw].map(c => c.charCodeAt(0)))
 }
-// 기존 사용자 마이그레이션용 (이전 버전 코드 읽기)
-const getLegacyCode = () =>
-  new URLSearchParams(window.location.search).get('h') ||
-  localStorage.getItem('householdId') ||
-  null
+
+// ✅ 핵심 추가: 쿠키 유틸 (localStorage가 지워져도 1년간 유지)
+const setCookie = (name, val, days = 365) => {
+  const expires = new Date(Date.now() + days * 86400000).toUTCString()
+  document.cookie = `${name}=${val}; expires=${expires}; path=/; SameSite=Lax`
+}
+const getCookie = (name) => {
+  const found = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='))
+  return found ? found.split('=')[1] : null
+}
+
+// 코드 저장: localStorage + 쿠키 + URL 동시에 저장
+const saveCode = (code) => {
+  localStorage.setItem('householdId', code)
+  setCookie('householdId', code, 365)
+  // URL에도 코드 추가 → 브라우저가 이 URL을 기억
+  if (!window.location.search.includes(`h=${code}`)) {
+    window.history.replaceState({}, '', `?h=${code}`)
+  }
+}
+
+// 코드 읽기: URL → localStorage → 쿠키 순서로 확인
+const readSavedCode = () => {
+  const params = new URLSearchParams(window.location.search)
+  return params.get('h') || localStorage.getItem('householdId') || getCookie('householdId') || null
+}
 
 const CATS = ['🥛 유제품', '🥩 육류', '🥦 채소', '🍎 과일', '🐟 수산물', '🧀 가공식품', '🥚 계란', '🍶 음료', '기타']
 const REMAIN_PRESETS = [
@@ -41,7 +62,6 @@ const REMAIN_PRESETS = [
 // ====== 공통 스타일 ======
 const S = {
   app: { maxWidth: 430, margin: '0 auto', minHeight: '100dvh', background: '#f5f5f5', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif' },
-  center: { maxWidth: 430, margin: '0 auto', minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 28, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif' },
   header: { background: '#fff', borderBottom: '0.5px solid rgba(0,0,0,0.1)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8, position: 'sticky', top: 0, zIndex: 10, flexShrink: 0 },
   content: { flex: 1, padding: 14, overflowY: 'auto', paddingBottom: 80 },
   nav: { background: '#fff', borderTop: '0.5px solid rgba(0,0,0,0.1)', display: 'flex', position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 430, zIndex: 10 },
@@ -51,6 +71,7 @@ const S = {
   btnPrimary: { padding: '13px', borderRadius: 8, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 500, fontFamily: 'inherit' },
   btnSecondary: { padding: '13px', borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.2)', background: 'none', cursor: 'pointer', fontSize: 14, color: '#666', fontFamily: 'inherit' },
 }
+
 const remainColor = (r) => {
   if (r === 0) return { bar: '#ccc', text: '#999' }
   if (r <= 25) return { bar: '#F7C1C1', text: '#A32D2D' }
@@ -58,69 +79,55 @@ const remainColor = (r) => {
   return { bar: '#C0DD97', text: '#3B6D11' }
 }
 
-// ====== 로그인 화면 ======
-function LoginScreen() {
-  const [email, setEmail] = useState('')
+// ====== 첫 실행 화면 ======
+function WelcomeScreen({ onEnterCode, onCreateNew }) {
+  const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
 
-  const sendLink = async () => {
-    const trimmed = email.trim()
-    if (!trimmed || !trimmed.includes('@')) { setError('올바른 이메일을 입력해주세요'); return }
+  const tryCode = async () => {
+    const trimmed = code.trim().toUpperCase()
+    if (!trimmed) { setError('코드를 입력해주세요'); return }
     setLoading(true); setError('')
-    const { error: err } = await supabase.auth.signInWithOtp({
-      email: trimmed,
-      options: { emailRedirectTo: window.location.href }
-    })
-    if (err) { setError('오류: ' + err.message); setLoading(false); return }
-    setSent(true); setLoading(false)
+    try {
+      const { data } = await supabase.from('households').select('id').eq('id', trimmed).maybeSingle()
+      if (data) { onEnterCode(trimmed) }
+      else { setError('해당 코드의 냉장고를 찾을 수 없습니다.') }
+    } catch { setError('연결에 실패했습니다. 잠시 후 다시 시도해주세요.') }
+    finally { setLoading(false) }
   }
 
-  if (sent) return (
-    <div style={S.center}>
-      <div style={{ fontSize: 52, marginBottom: 16 }}>📧</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: '#111', marginBottom: 10, textAlign: 'center' }}>이메일을 확인해주세요</div>
-      <div style={{ fontSize: 13, color: '#888', textAlign: 'center', lineHeight: 1.8, marginBottom: 20 }}>
-        <span style={{ fontWeight: 500, color: '#111' }}>{email}</span><br />
-        위 주소로 로그인 링크를 보냈습니다.<br />
-        링크를 클릭하면 자동으로 접속됩니다.
-      </div>
-      <div style={{ padding: '10px 14px', background: '#E6F1FB', borderRadius: 10, border: '0.5px solid #B5D4F4', width: '100%', boxSizing: 'border-box', marginBottom: 12 }}>
-        <div style={{ fontSize: 11, color: '#185FA5', lineHeight: 1.7 }}>
-          <i className="ti ti-info-circle" style={{ fontSize: 12, marginRight: 4 }} aria-hidden="true" />
-          이메일이 안 보이면 스팸함을 확인해주세요.<br />링크는 10분간 유효합니다.
-        </div>
-      </div>
-      <button onClick={() => setSent(false)} style={{ ...S.btnSecondary, width: '100%' }}>다시 시도</button>
-    </div>
-  )
-
   return (
-    <div style={S.center}>
-      <div style={{ fontSize: 52, marginBottom: 14 }}>🧊</div>
+    <div style={{ ...S.app, alignItems: 'center', justifyContent: 'center', padding: 28 }}>
+      <div style={{ fontSize: 52, marginBottom: 16 }}>🧊</div>
       <div style={{ fontSize: 20, fontWeight: 600, color: '#111', marginBottom: 6, textAlign: 'center' }}>우리집 냉장고</div>
-      <div style={{ fontSize: 13, color: '#888', marginBottom: 28, textAlign: 'center', lineHeight: 1.8 }}>
-        이메일로 로그인 링크를 보내드립니다.<br />
-        비밀번호 없이 링크 클릭 한 번으로 로그인되며<br />
-        <span style={{ color: '#111', fontWeight: 500 }}>이후엔 자동으로 접속됩니다.</span>
+      <div style={{ fontSize: 13, color: '#888', marginBottom: 32, textAlign: 'center', lineHeight: 1.6 }}>
+        기존에 사용하던 냉장고가 있다면<br />코드를 입력해서 데이터를 복구하세요
       </div>
-      <div style={{ width: '100%', marginBottom: 14 }}>
-        <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 6 }}>이메일 주소</label>
-        <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
-          placeholder="example@gmail.com"
-          style={{ ...S.input }}
-          onKeyDown={e => e.key === 'Enter' && sendLink()} />
+      <div style={{ width: '100%', marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>기존 냉장고 코드 입력</div>
+        <input value={code} onChange={e => { setCode(e.target.value.toUpperCase()); setError('') }}
+          placeholder="예: ABC123" maxLength={6}
+          style={{ ...S.input, fontSize: 20, textAlign: 'center', letterSpacing: 4, fontWeight: 500 }}
+          onKeyDown={e => e.key === 'Enter' && tryCode()} />
         {error && <div style={{ fontSize: 12, color: '#A32D2D', marginTop: 6 }}>{error}</div>}
       </div>
-      <button onClick={sendLink} disabled={loading}
-        style={{ ...S.btnPrimary, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: loading ? 0.6 : 1 }}>
-        {loading
-          ? <><i className="ti ti-loader-2" style={{ fontSize: 16 }} aria-hidden="true" />전송 중...</>
-          : <><i className="ti ti-mail" style={{ fontSize: 16 }} aria-hidden="true" />로그인 링크 받기</>}
+      <button onClick={tryCode} disabled={loading}
+        style={{ ...S.btnPrimary, width: '100%', marginBottom: 10, opacity: loading ? 0.6 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+        {loading ? <><i className="ti ti-loader-2" style={{ fontSize: 16 }} aria-hidden="true" />확인 중...</> : '이 코드로 접속'}
       </button>
-      <div style={{ marginTop: 20, fontSize: 11, color: '#bbb', textAlign: 'center', lineHeight: 1.6 }}>
-        가족 초대 링크로 접속하면 같은 냉장고에 자동 연결됩니다
+      <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0 10px' }}>
+        <div style={{ flex: 1, height: '0.5px', background: 'rgba(0,0,0,0.1)' }} />
+        <span style={{ fontSize: 11, color: '#bbb' }}>또는</span>
+        <div style={{ flex: 1, height: '0.5px', background: 'rgba(0,0,0,0.1)' }} />
+      </div>
+      <button onClick={onCreateNew} style={{ ...S.btnSecondary, width: '100%' }}>새 냉장고 시작하기</button>
+      <div style={{ marginTop: 20, padding: '10px 14px', background: '#E6F1FB', borderRadius: 10, border: '0.5px solid #B5D4F4', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ fontSize: 11, color: '#185FA5', lineHeight: 1.7 }}>
+          <i className="ti ti-info-circle" style={{ fontSize: 12, marginRight: 4 }} aria-hidden="true" />
+          <strong>코드를 모르시나요?</strong><br />
+          Supabase → Table Editor → households 테이블에서 기존 코드를 확인할 수 있습니다.
+        </div>
       </div>
     </div>
   )
@@ -134,21 +141,34 @@ function PCard({ p, alertDays, onDel, onQty, onEdit }) {
   const expired = !isEmpty && dd < 0
   const urgent = !isEmpty && !expired && dd <= alertDays
   let cs, ddStyle, ddLabel
-  if (isEmpty) { cs = { background: '#f5f5f5', border: '0.5px solid rgba(0,0,0,0.08)' }; ddStyle = { color: '#999', background: '#f0f0f0', border: '0.5px solid rgba(0,0,0,0.1)' }; ddLabel = '소진됨' }
-  else if (expired) { cs = { background: '#FCEBEB', border: '0.5px solid #F7C1C1' }; ddStyle = { color: '#A32D2D', background: '#FCEBEB', border: '0.5px solid #F7C1C1' }; ddLabel = `만료 ${Math.abs(dd)}일 경과` }
-  else if (urgent) { cs = { background: '#FFFDF7', border: '0.5px solid #FAC775' }; ddStyle = { color: '#854F0B', background: '#FAEEDA', border: '0.5px solid #FAC775' }; ddLabel = dd === 0 ? 'D-day' : `D-${dd}` }
-  else { cs = { background: '#fff', border: '0.5px solid rgba(0,0,0,0.1)' }; ddStyle = { color: '#666', background: '#f5f5f5', border: '0.5px solid rgba(0,0,0,0.1)' }; ddLabel = `D-${dd}` }
+  if (isEmpty) {
+    cs = { background: '#f5f5f5', border: '0.5px solid rgba(0,0,0,0.08)' }
+    ddStyle = { color: '#999', background: '#f0f0f0', border: '0.5px solid rgba(0,0,0,0.1)' }; ddLabel = '소진됨'
+  } else if (expired) {
+    cs = { background: '#FCEBEB', border: '0.5px solid #F7C1C1' }
+    ddStyle = { color: '#A32D2D', background: '#FCEBEB', border: '0.5px solid #F7C1C1' }; ddLabel = `만료 ${Math.abs(dd)}일 경과`
+  } else if (urgent) {
+    cs = { background: '#FFFDF7', border: '0.5px solid #FAC775' }
+    ddStyle = { color: '#854F0B', background: '#FAEEDA', border: '0.5px solid #FAC775' }; ddLabel = dd === 0 ? 'D-day' : `D-${dd}`
+  } else {
+    cs = { background: '#fff', border: '0.5px solid rgba(0,0,0,0.1)' }
+    ddStyle = { color: '#666', background: '#f5f5f5', border: '0.5px solid rgba(0,0,0,0.1)' }; ddLabel = `D-${dd}`
+  }
   const remaining = p.remaining ?? 100
   const rc = remainColor(remaining)
-  const sb = p.storage === '냉동' ? { bg: '#E6EEF9', color: '#1A4D8F', label: '🧊 냉동' } : { bg: '#E6F1FB', color: '#185FA5', label: '❄️ 냉장' }
+  const storageBadge = p.storage === '냉동'
+    ? { bg: '#E6EEF9', color: '#1A4D8F', label: '🧊 냉동' }
+    : { bg: '#E6F1FB', color: '#185FA5', label: '❄️ 냉장' }
   return (
     <div style={{ ...cs, borderRadius: 12, padding: '10px 12px', marginBottom: 8, opacity: isEmpty ? 0.6 : 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {p.category ? <span style={{ fontSize: 18, flexShrink: 0 }}>{p.category.split(' ')[0]}</span> : <span style={{ fontSize: 18, flexShrink: 0 }}>{p.storage === '냉동' ? '🧊' : '❄️'}</span>}
+        {p.category
+          ? <span style={{ fontSize: 18, flexShrink: 0 }}>{p.category.split(' ')[0]}</span>
+          : <span style={{ fontSize: 18, flexShrink: 0 }}>{p.storage === '냉동' ? '🧊' : '❄️'}</span>}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ fontWeight: 500, fontSize: 14, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: isEmpty ? 'line-through' : 'none' }}>{p.name}</span>
-            <span style={{ fontSize: 10, fontWeight: 500, padding: '1px 5px', borderRadius: 20, flexShrink: 0, background: sb.bg, color: sb.color }}>{sb.label}</span>
+            <span style={{ fontSize: 10, fontWeight: 500, padding: '1px 5px', borderRadius: 20, flexShrink: 0, background: storageBadge.bg, color: storageBadge.color }}>{storageBadge.label}</span>
           </div>
           <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>{fmtDate(p.expiryDate)}</div>
         </div>
@@ -160,8 +180,12 @@ function PCard({ p, alertDays, onDel, onQty, onEdit }) {
             <button onClick={() => onQty(p.id, p.quantity + 1)} style={{ width: 24, height: 24, borderRadius: 12, border: '0.5px solid rgba(0,0,0,0.2)', background: 'none', cursor: 'pointer', fontSize: 15, color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
           </div>}
         <div style={{ fontSize: 10, fontWeight: 500, padding: '2px 7px', borderRadius: 20, whiteSpace: 'nowrap', flexShrink: 0, ...ddStyle }}>{ddLabel}</div>
-        <button onClick={() => onEdit(p)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#aaa', flexShrink: 0, display: 'flex' }}><i className="ti ti-pencil" style={{ fontSize: 14 }} aria-hidden="true" /></button>
-        <button onClick={() => onDel(p.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#ccc', flexShrink: 0, display: 'flex' }}><i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true" /></button>
+        <button onClick={() => onEdit(p)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#aaa', flexShrink: 0, display: 'flex' }}>
+          <i className="ti ti-pencil" style={{ fontSize: 14 }} aria-hidden="true" />
+        </button>
+        <button onClick={() => onDel(p.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#ccc', flexShrink: 0, display: 'flex' }}>
+          <i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true" />
+        </button>
       </div>
       {isPercent && !isEmpty && (
         <div style={{ marginTop: 8, marginLeft: 26 }}>
@@ -176,8 +200,10 @@ function PCard({ p, alertDays, onDel, onQty, onEdit }) {
 
 // ====== 홈 탭 ======
 function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh, syncing }) {
-  const [sf, setSf] = useState('전체')
-  const filtered = products ? (sf === '전체' ? products : products.filter(p => (p.storage ?? '냉장') === sf)) : null
+  const [storageFilter, setStorageFilter] = useState('전체')
+  const filtered = products
+    ? (storageFilter === '전체' ? products : products.filter(p => (p.storage ?? '냉장') === storageFilter))
+    : null
   const isEmpty = (p) => (p.quantity_type === 'percent' ? (p.remaining ?? 100) === 0 : p.quantity === 0)
   const expired = filtered?.filter(p => !isEmpty(p) && getDday(p.expiryDate) < 0).sort((a, b) => getDday(a.expiryDate) - getDday(b.expiryDate)) ?? []
   const urgent = filtered?.filter(p => { const d = getDday(p.expiryDate); return !isEmpty(p) && d >= 0 && d <= alertDays }).sort((a, b) => getDday(a.expiryDate) - getDday(b.expiryDate)) ?? []
@@ -194,8 +220,8 @@ function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh
     <div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
         {['전체', '냉장', '냉동'].map(f => (
-          <button key={f} onClick={() => setSf(f)}
-            style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: sf === f ? 500 : 400, background: sf === f ? '#111' : '#fff', color: sf === f ? '#fff' : '#888', transition: 'all 0.15s' }}>
+          <button key={f} onClick={() => setStorageFilter(f)}
+            style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: storageFilter === f ? 500 : 400, background: storageFilter === f ? '#111' : '#fff', color: storageFilter === f ? '#fff' : '#888', transition: 'all 0.15s' }}>
             {f === '전체' ? '전체' : f === '냉장' ? '❄️ 냉장' : '🧊 냉동'}
           </button>
         ))}
@@ -389,6 +415,7 @@ function ProductForm({ initial, onSubmit, onCancel, submitLabel, submitting, sho
 }
 
 // ====== 등록 탭 ======
+// ✅ 수정: onCancel prop 추가 → 취소 버튼 동작
 function AddTab({ onAdd, onCancel }) {
   const [submitting, setSubmitting] = useState(false)
   const handleSubmit = async (form) => { setSubmitting(true); try { await onAdd(form) } finally { setSubmitting(false) } }
@@ -402,10 +429,13 @@ function AddTab({ onAdd, onCancel }) {
 }
 
 // ====== 설정 탭 ======
-function SettingsTab({ alertDays, onAlertChange, householdId, userEmail, onSignOut }) {
+function SettingsTab({ alertDays, onAlertChange, householdId, onSwitchHousehold }) {
   const [copied, setCopied] = useState(false)
   const [pushStatus, setPushStatus] = useState('loading')
   const [pushLoading, setPushLoading] = useState(false)
+  const [codeInput, setCodeInput] = useState('')
+  const [codeLoading, setCodeLoading] = useState(false)
+  const [codeError, setCodeError] = useState('')
   const shareLink = `${window.location.origin}?h=${householdId}`
   useEffect(() => { checkPush() }, [])
   const checkPush = async () => {
@@ -440,10 +470,20 @@ function SettingsTab({ alertDays, onAlertChange, householdId, userEmail, onSignO
     } catch (e) { console.error(e) } finally { setPushLoading(false) }
   }
   const copy = () => { navigator.clipboard.writeText(shareLink).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500) }).catch(() => alert(shareLink)) }
+  const switchByCode = async () => {
+    const trimmed = codeInput.trim().toUpperCase()
+    if (!trimmed) { setCodeError('코드를 입력해주세요'); return }
+    setCodeLoading(true); setCodeError('')
+    try {
+      const { data } = await supabase.from('households').select('id').eq('id', trimmed).maybeSingle()
+      if (data) { onSwitchHousehold(trimmed) }
+      else { setCodeError('해당 코드의 냉장고를 찾을 수 없습니다') }
+    } catch { setCodeError('연결에 실패했습니다') } finally { setCodeLoading(false) }
+  }
   const PushRow = () => {
-    if (pushStatus === 'loading') return <div style={{ fontSize: 13, color: '#aaa' }}>확인 중...</div>
-    if (pushStatus === 'unsupported') return <div style={{ fontSize: 12, color: '#aaa' }}>이 브라우저는 푸시 알림을 지원하지 않습니다.</div>
-    if (pushStatus === 'denied') return <div style={{ fontSize: 12, color: '#A32D2D' }}>알림 권한이 거부되었습니다. 기기 설정에서 허용해주세요.</div>
+    if (pushStatus === 'loading') return <div style={{ fontSize: 13, color: '#aaa' }}>알림 상태 확인 중...</div>
+    if (pushStatus === 'unsupported') return <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.6 }}>이 브라우저는 푸시 알림을 지원하지 않습니다.</div>
+    if (pushStatus === 'denied') return <div style={{ fontSize: 12, color: '#A32D2D', lineHeight: 1.6 }}>알림 권한이 거부되었습니다. 기기 설정에서 허용해주세요.</div>
     if (pushStatus === 'on') return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: 4, background: '#3B6D11' }} /><span style={{ fontSize: 13, color: '#3B6D11', fontWeight: 500 }}>알림 켜짐 (매일 오전 9시)</span></div>
@@ -455,45 +495,52 @@ function SettingsTab({ alertDays, onAlertChange, householdId, userEmail, onSignO
   return (
     <div>
       <div style={{ fontSize: 16, fontWeight: 500, color: '#111', marginBottom: 14 }}>설정</div>
-
-      {/* 계정 정보 */}
-      <div style={{ ...S.card, borderColor: '#C0DD97', background: '#EAF3DE' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 18, background: '#3B6D11', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <i className="ti ti-user" style={{ fontSize: 18, color: '#fff' }} aria-hidden="true" />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: '#3B6D11' }}>로그인됨</div>
-            <div style={{ fontSize: 14, fontWeight: 500, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userEmail}</div>
-          </div>
-          <button onClick={onSignOut} style={{ fontSize: 12, color: '#666', background: 'none', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>로그아웃</button>
-        </div>
-      </div>
-
-      {/* 가족 초대 */}
       <div style={S.card}>
         <div style={{ fontSize: 13, fontWeight: 500, color: '#111', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 5 }}><i className="ti ti-users" style={{ fontSize: 15 }} aria-hidden="true" />가족 초대 링크</div>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.6 }}>이 링크를 공유하면 가족이 같은 냉장고를 함께 관리합니다.<br />가족도 이메일로 한 번만 로그인하면 이후 자동 접속됩니다.</div>
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 8, lineHeight: 1.6 }}>이 링크를 북마크해두면 코드 없이 항상 자동 접속됩니다</div>
         <div style={{ background: '#f5f5f5', borderRadius: 8, padding: '10px 12px', fontSize: 11, color: '#555', marginBottom: 10, wordBreak: 'break-all', border: '0.5px solid rgba(0,0,0,0.1)', lineHeight: 1.5 }}>{shareLink}</div>
         <button onClick={copy} style={{ width: '100%', padding: '11px', borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.2)', background: copied ? '#EAF3DE' : 'none', cursor: 'pointer', color: copied ? '#3B6D11' : '#111', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, fontFamily: 'inherit', fontWeight: copied ? 500 : 400 }}>
           <i className={`ti ${copied ? 'ti-check' : 'ti-copy'}`} style={{ fontSize: 16 }} aria-hidden="true" />{copied ? '링크 복사됨!' : '링크 복사하기'}
         </button>
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, color: '#999' }}>우리 집 코드</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: '#111', letterSpacing: 3 }}>#{householdId}</span>
+        </div>
       </div>
-
+      <div style={{ ...S.card, border: '1px solid #FAC775', background: '#FFFDF7' }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: '#854F0B', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 5 }}><i className="ti ti-rotate" style={{ fontSize: 15 }} aria-hidden="true" />다른 냉장고 코드로 이동</div>
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.6 }}>데이터가 사라진 경우 기존 코드를 입력하면 복원됩니다</div>
+        <input value={codeInput} onChange={e => { setCodeInput(e.target.value.toUpperCase()); setCodeError('') }}
+          placeholder="기존 코드 입력 (예: ABC123)" maxLength={6}
+          style={{ ...S.input, fontSize: 15, textAlign: 'center', letterSpacing: 3, fontWeight: 500, marginBottom: 8 }}
+          onKeyDown={e => e.key === 'Enter' && switchByCode()} />
+        {codeError && <div style={{ fontSize: 12, color: '#A32D2D', marginBottom: 8 }}>{codeError}</div>}
+        <button onClick={switchByCode} disabled={codeLoading}
+          style={{ ...S.btnPrimary, width: '100%', background: '#854F0B', opacity: codeLoading ? 0.6 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          {codeLoading ? <><i className="ti ti-loader-2" style={{ fontSize: 16 }} aria-hidden="true" />확인 중...</> : '이 코드로 이동'}
+        </button>
+      </div>
       <div style={S.card}>
         <div style={{ fontSize: 13, fontWeight: 500, color: '#111', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}><i className="ti ti-bell" style={{ fontSize: 15 }} aria-hidden="true" />푸시 알림</div>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 12 }}>유통기한 임박 제품을 매일 오전 9시에 알려드립니다.</div>
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 12, lineHeight: 1.6 }}>유통기한 임박 제품을 매일 오전 9시에 알려드립니다.</div>
         <PushRow />
       </div>
-
       <div style={S.card}>
         <div style={{ fontSize: 13, fontWeight: 500, color: '#111', marginBottom: 2 }}>유통기한 임박 기준</div>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 14 }}>이 기간 이내 제품에 경고 표시 및 알림</div>
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 14 }}>이 기간 이내 제품에 경고 표시 및 알림을 보냅니다</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <input type="range" min="1" max="14" step="1" value={alertDays} onChange={e => onAlertChange(Number(e.target.value))} style={{ flex: 1, accentColor: '#111', height: 4 }} />
           <span style={{ fontSize: 16, fontWeight: 500, color: '#111', minWidth: 46, textAlign: 'right' }}>{alertDays}일 전</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#bbb', marginTop: 5 }}><span>1일</span><span>7일</span><span>14일</span></div>
+      </div>
+      <div style={{ background: '#E6F1FB', borderRadius: 10, padding: '12px 14px', border: '0.5px solid #B5D4F4' }}>
+        <div style={{ fontSize: 12, color: '#185FA5', lineHeight: 1.7 }}>
+          <i className="ti ti-device-mobile" style={{ fontSize: 13, marginRight: 4 }} aria-hidden="true" />
+          <strong>홈 화면에 추가할 때 초대 링크 URL로 추가하세요!</strong><br />
+          아이폰: 사파리 → 공유 → 홈 화면에 추가<br />
+          갤럭시: 크롬 → 메뉴(⋮) → 홈 화면에 추가
+        </div>
       </div>
     </div>
   )
@@ -501,7 +548,6 @@ function SettingsTab({ alertDays, onAlertChange, householdId, userEmail, onSignO
 
 // ====== 메인 앱 ======
 export default function App() {
-  const [authSession, setAuthSession] = useState(undefined) // undefined=로딩중, null=미로그인
   const [tab, setTab] = useState('home')
   const [products, setProducts] = useState(null)
   const [alertDays, setAlertDays] = useState(3)
@@ -509,6 +555,7 @@ export default function App() {
   const [appError, setAppError] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
+  const [showWelcome, setShowWelcome] = useState(false)
   const hidRef = useRef('')
 
   const fetchProducts = useCallback(async (hid) => {
@@ -520,96 +567,55 @@ export default function App() {
     } finally { setSyncing(false) }
   }, [])
 
-  // 로그인 후 가구 초기화
-  const initWithSession = useCallback(async (session) => {
+  const setupHousehold = useCallback(async (code) => {
     try {
-      const userId = session.user.id
-      const urlCode = new URLSearchParams(window.location.search).get('h')
-      const legacyCode = getLegacyCode() // 이전 버전 코드 (마이그레이션용)
-
-      // 1. DB에서 이 사용자의 가구 조회
-      let { data: userHousehold } = await supabase
-        .from('user_households')
-        .select('household_id')
-        .eq('user_id', userId)
-        .maybeSingle()
-
-      let code = userHousehold?.household_id
-
-      // 2. 초대 링크로 접속한 경우 → 해당 가구에 합류
-      if (urlCode && urlCode !== code) {
-        const { data: hh } = await supabase.from('households').select('id').eq('id', urlCode).maybeSingle()
-        if (hh) {
-          await supabase.from('user_households').upsert({ user_id: userId, household_id: urlCode }, { onConflict: 'user_id,household_id' })
-          code = urlCode
-        }
-      }
-
-      // 3. 이전 버전 사용자 마이그레이션 (기존 데이터 보존)
-      if (!code && legacyCode) {
-        const { data: hh } = await supabase.from('households').select('id').eq('id', legacyCode).maybeSingle()
-        if (hh) {
-          await supabase.from('user_households').upsert({ user_id: userId, household_id: legacyCode }, { onConflict: 'user_id,household_id' })
-          code = legacyCode
-        }
-      }
-
-      // 4. 가구 없으면 새로 생성
-      if (!code) {
-        code = genCode()
-        await supabase.from('households').insert({ id: code })
-        await supabase.from('user_households').insert({ user_id: userId, household_id: code })
-      }
-
-      // URL에 코드 반영 (북마크 용이)
-      if (!window.location.search.includes(`h=${code}`)) {
-        window.history.replaceState({}, '', `?h=${code}`)
-      }
-      localStorage.setItem('householdId', code)
-
-      hidRef.current = code
-      setHouseholdId(code)
+      const { data: existing } = await supabase.from('households').select('id').eq('id', code).maybeSingle()
+      if (!existing) await supabase.from('households').insert({ id: code })
+      // ✅ 3중 저장: localStorage + 쿠키(1년) + URL
+      saveCode(code)
+      hidRef.current = code; setHouseholdId(code)
       const saved = localStorage.getItem(`alertDays_${code}`)
       if (saved) setAlertDays(Number(saved))
+      setShowWelcome(false)
       await fetchProducts(code)
-    } catch (e) {
-      console.error(e)
-      setAppError('초기화에 실패했습니다: ' + e.message)
-    }
+    } catch (e) { console.error(e); setAppError('서버 연결에 실패했습니다.') }
   }, [fetchProducts])
 
-  // 인증 상태 감지
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthSession(session ?? null)
-      if (session) initWithSession(session)
-    })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setAuthSession(session ?? null)
-      if (event === 'SIGNED_IN' && session) initWithSession(session)
-    })
-    return () => subscription.unsubscribe()
-  }, [initWithSession])
+  const init = useCallback(async () => {
+    try {
+      // ✅ URL → localStorage → 쿠키 순서로 코드 읽기
+      const code = readSavedCode()
+      if (!code) {
+        setShowWelcome(true)
+        return
+      }
+      await setupHousehold(code)
+    } catch (e) { console.error(e); setAppError('서버 연결에 실패했습니다.') }
+  }, [setupHousehold])
 
-  // 실시간 동기화
+  useEffect(() => { init() }, [init])
+
+  const switchHousehold = useCallback((newCode) => {
+    saveCode(newCode)
+    window.location.href = `${window.location.origin}?h=${newCode}`
+  }, [])
+
   useEffect(() => {
     if (!householdId) return
-    const ch = supabase.channel('products-rt')
+    const ch = supabase.channel('products-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
-        const hid = payload.new?.household_id || payload.old?.household_id
-        if (hid === hidRef.current) fetchProducts(hidRef.current)
+        const changedHid = payload.new?.household_id || payload.old?.household_id
+        if (changedHid === hidRef.current) fetchProducts(hidRef.current)
       }).subscribe()
     return () => supabase.removeChannel(ch)
   }, [householdId, fetchProducts])
 
-  // 10초마다 자동 새로고침
   useEffect(() => {
     if (!householdId) return
     const t = setInterval(() => fetchProducts(hidRef.current), 10000)
     return () => clearInterval(t)
   }, [householdId, fetchProducts])
 
-  // 화면 켜질 때 새로고침
   useEffect(() => {
     const fn = () => { if (document.visibilityState === 'visible' && hidRef.current) fetchProducts(hidRef.current) }
     document.addEventListener('visibilitychange', fn)
@@ -644,28 +650,14 @@ export default function App() {
 
   const updateAlertDays = (d) => { setAlertDays(d); localStorage.setItem(`alertDays_${hidRef.current}`, d) }
 
-  const signOut = async () => {
-    await supabase.auth.signOut()
-    setProducts(null); setHouseholdId(''); hidRef.current = ''
-  }
-
   const TABS = [{ id: 'home', icon: 'ti-home', lbl: '홈' }, { id: 'add', icon: 'ti-plus', lbl: '등록' }, { id: 'settings', icon: 'ti-settings', lbl: '설정' }]
 
-  // 로딩 중
-  if (authSession === undefined) return (
-    <div style={{ ...S.center }}>
-      <i className="ti ti-loader-2" style={{ fontSize: 36, color: '#aaa', marginBottom: 12 }} aria-hidden="true" />
-      <div style={{ fontSize: 14, color: '#aaa' }}>로딩 중...</div>
-    </div>
-  )
-
-  // 로그인 필요
-  if (!authSession) return <LoginScreen />
+  if (showWelcome) return <WelcomeScreen onEnterCode={setupHousehold} onCreateNew={() => setupHousehold(genCode())} />
 
   if (appError) return (
-    <div style={{ ...S.center, textAlign: 'center' }}>
+    <div style={{ ...S.app, alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center' }}>
       <div style={{ fontSize: 44, marginBottom: 16 }}>⚠️</div>
-      <div style={{ fontSize: 14, color: '#A32D2D', lineHeight: 1.8 }}>{appError}</div>
+      <div style={{ fontSize: 14, color: '#A32D2D', lineHeight: 1.8, whiteSpace: 'pre-line' }}>{appError}</div>
     </div>
   )
 
@@ -678,8 +670,9 @@ export default function App() {
       </div>
       <div style={S.content}>
         {tab === 'home' && <HomeTab products={products} alertDays={alertDays} onDel={deleteProduct} onQty={updateQty} onEdit={setEditingProduct} onGoAdd={() => setTab('add')} onRefresh={() => fetchProducts(hidRef.current)} syncing={syncing} />}
+        {/* ✅ 수정: onCancel={() => setTab('home')} 전달 */}
         {tab === 'add' && <AddTab onAdd={addProduct} onCancel={() => setTab('home')} />}
-        {tab === 'settings' && <SettingsTab alertDays={alertDays} onAlertChange={updateAlertDays} householdId={householdId} userEmail={authSession?.user?.email} onSignOut={signOut} />}
+        {tab === 'settings' && <SettingsTab alertDays={alertDays} onAlertChange={updateAlertDays} householdId={householdId} onSwitchHousehold={switchHousehold} />}
       </div>
       <div style={S.nav}>
         {TABS.map(t => (
@@ -697,7 +690,10 @@ export default function App() {
             <span style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>제품 수정</span>
           </div>
           <div style={{ padding: 16 }}>
-            <ProductForm initial={{ name: editingProduct.name, storage: editingProduct.storage ?? '냉장', category: editingProduct.category ?? '', expiryDate: editingProduct.expiryDate, quantityType: editingProduct.quantity_type ?? 'count', quantity: editingProduct.quantity, remaining: editingProduct.remaining ?? 100 }} onSubmit={saveProduct} onCancel={() => setEditingProduct(null)} submitLabel="수정 저장" showScan={false} />
+            <ProductForm
+              initial={{ name: editingProduct.name, storage: editingProduct.storage ?? '냉장', category: editingProduct.category ?? '', expiryDate: editingProduct.expiryDate, quantityType: editingProduct.quantity_type ?? 'count', quantity: editingProduct.quantity, remaining: editingProduct.remaining ?? 100 }}
+              onSubmit={saveProduct} onCancel={() => setEditingProduct(null)} submitLabel="수정 저장" showScan={false}
+            />
           </div>
         </div>
       )}
