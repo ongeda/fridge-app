@@ -58,6 +58,13 @@ const REMAIN_PRESETS = [
   { label: '1/4', value: 25 },
   { label: '거의 없음', value: 10 },
 ]
+const EMOJI_PRESETS = ['🍞', '🧃', '🍜', '🥜', '🍫', '🧂', '🍚', '🥫', '🍕', '🌶️', '🧊', '📦']
+// 기본 카테고리(CATS) + 사용자가 추가한 카테고리를 합쳐서 하나의 목록으로 만듦 (기타는 항상 맨 뒤)
+const buildCategoryOptions = (customCats = []) => {
+  const fixed = CATS.filter(c => c !== '기타')
+  const custom = customCats.map(c => `${c.emoji} ${c.name}`)
+  return [...fixed, ...custom, '기타']
+}
 
 // ====== 공통 스타일 ======
 const S = {
@@ -161,17 +168,15 @@ function PCard({ p, alertDays, onDel, onQty, onEdit }) {
     : { bg: '#E6F1FB', color: '#185FA5', label: '❄️ 냉장' }
   return (
     <div style={{ ...cs, borderRadius: 12, padding: '10px 12px', marginBottom: 8, opacity: isEmpty ? 0.6 : 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
         {p.category
           ? <span style={{ fontSize: 18, flexShrink: 0 }}>{p.category.split(' ')[0]}</span>
           : <span style={{ fontSize: 18, flexShrink: 0 }}>{p.storage === '냉동' ? '🧊' : '❄️'}</span>}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontWeight: 500, fontSize: 14, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: isEmpty ? 'line-through' : 'none' }}>{p.name}</span>
-            <span style={{ fontSize: 10, fontWeight: 500, padding: '1px 5px', borderRadius: 20, flexShrink: 0, background: storageBadge.bg, color: storageBadge.color }}>{storageBadge.label}</span>
-          </div>
-          <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>{fmtDate(p.expiryDate)}</div>
-        </div>
+        <span style={{ fontWeight: 500, fontSize: 14, color: '#111', flex: 1, minWidth: 0, wordBreak: 'break-word', textDecoration: isEmpty ? 'line-through' : 'none' }}>{p.name}</span>
+        <span style={{ fontSize: 10, fontWeight: 500, padding: '1px 5px', borderRadius: 20, flexShrink: 0, background: storageBadge.bg, color: storageBadge.color }}>{storageBadge.label}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
+        <div style={{ fontSize: 11, color: '#888', flex: 1, minWidth: 0 }}>{fmtDate(p.expiryDate)}</div>
         {isPercent
           ? <div style={{ fontSize: 13, fontWeight: 500, color: rc.text, flexShrink: 0 }}>{remaining}%</div>
           : <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
@@ -199,10 +204,14 @@ function PCard({ p, alertDays, onDel, onQty, onEdit }) {
 }
 
 // ====== 홈 탭 ======
-function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh, syncing }) {
+function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh, syncing, categoryOptions }) {
   const [storageFilter, setStorageFilter] = useState('전체')
+  const [categoryFilter, setCategoryFilter] = useState('전체')
   const filtered = products
-    ? (storageFilter === '전체' ? products : products.filter(p => (p.storage ?? '냉장') === storageFilter))
+    ? products.filter(p =>
+        (storageFilter === '전체' || (p.storage ?? '냉장') === storageFilter) &&
+        (categoryFilter === '전체' || p.category === categoryFilter)
+      )
     : null
   const isEmpty = (p) => (p.quantity_type === 'percent' ? (p.remaining ?? 100) === 0 : p.quantity === 0)
   const expired = filtered?.filter(p => !isEmpty(p) && getDday(p.expiryDate) < 0).sort((a, b) => getDday(a.expiryDate) - getDday(b.expiryDate)) ?? []
@@ -218,11 +227,19 @@ function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh
   )
   return (
     <div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         {['전체', '냉장', '냉동'].map(f => (
           <button key={f} onClick={() => setStorageFilter(f)}
             style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: storageFilter === f ? 500 : 400, background: storageFilter === f ? '#111' : '#fff', color: storageFilter === f ? '#fff' : '#888', transition: 'all 0.15s' }}>
             {f === '전체' ? '전체' : f === '냉장' ? '❄️ 냉장' : '🧊 냉동'}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, overflowX: 'auto' }}>
+        {['전체', ...categoryOptions].map(c => (
+          <button key={c} onClick={() => setCategoryFilter(c)}
+            style={{ flexShrink: 0, padding: '7px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: categoryFilter === c ? 500 : 400, background: categoryFilter === c ? '#111' : '#fff', color: categoryFilter === c ? '#fff' : '#888', whiteSpace: 'nowrap' }}>
+            {c}
           </button>
         ))}
       </div>
@@ -263,7 +280,7 @@ function HomeTab({ products, alertDays, onDel, onQty, onEdit, onGoAdd, onRefresh
 }
 
 // ====== 공용 제품 폼 ======
-function ProductForm({ initial, onSubmit, onCancel, submitLabel, submitting, showScan = false }) {
+function ProductForm({ initial, onSubmit, onCancel, submitLabel, submitting, showScan = false, categoryOptions, onGoToCategoryManage }) {
   const [form, setForm] = useState({ name: '', storage: '냉장', category: '', expiryDate: '', quantityType: 'count', quantity: 1, remaining: 100, ...initial })
   const [scanning, setScanning] = useState(false)
   const [lookingUp, setLookingUp] = useState(false)
@@ -356,9 +373,13 @@ function ProductForm({ initial, onSubmit, onCancel, submitLabel, submitting, sho
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 10 }}>
         <div>
           <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>카테고리</label>
-          <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={{ ...S.input, height: 42 }}>
+          <select value={form.category} onChange={e => {
+            if (e.target.value === '__add_category__') { onGoToCategoryManage(); return }
+            setForm({ ...form, category: e.target.value })
+          }} style={{ ...S.input, height: 42 }}>
             <option value="">선택 안함</option>
-            {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+            {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            <option value="__add_category__">+ 새 카테고리 추가</option>
           </select>
         </div>
         <div>
@@ -416,26 +437,33 @@ function ProductForm({ initial, onSubmit, onCancel, submitLabel, submitting, sho
 
 // ====== 등록 탭 ======
 // ✅ 수정: onCancel prop 추가 → 취소 버튼 동작
-function AddTab({ onAdd, onCancel }) {
+function AddTab({ onAdd, onCancel, categoryOptions, onGoToCategoryManage }) {
   const [submitting, setSubmitting] = useState(false)
   const handleSubmit = async (form) => { setSubmitting(true); try { await onAdd(form) } finally { setSubmitting(false) } }
   return (
     <div>
       <div style={{ fontSize: 16, fontWeight: 500, color: '#111', marginBottom: 2 }}>제품 등록</div>
       <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>냉장고에 넣은 제품을 등록해주세요</div>
-      <ProductForm onSubmit={handleSubmit} onCancel={onCancel} submitLabel="등록하기" submitting={submitting} showScan={true} />
+      <ProductForm onSubmit={handleSubmit} onCancel={onCancel} submitLabel="등록하기" submitting={submitting} showScan={true}
+        categoryOptions={categoryOptions} onGoToCategoryManage={onGoToCategoryManage} />
     </div>
   )
 }
 
 // ====== 설정 탭 ======
-function SettingsTab({ alertDays, onAlertChange, householdId, onSwitchHousehold }) {
+function SettingsTab({ alertDays, onAlertChange, householdId, onSwitchHousehold, customCategories, onAddCategory, onRenameCategory, onDeleteCategory }) {
   const [copied, setCopied] = useState(false)
   const [pushStatus, setPushStatus] = useState('loading')
   const [pushLoading, setPushLoading] = useState(false)
   const [codeInput, setCodeInput] = useState('')
   const [codeLoading, setCodeLoading] = useState(false)
   const [codeError, setCodeError] = useState('')
+  const [newEmoji, setNewEmoji] = useState(EMOJI_PRESETS[0])
+  const [newName, setNewName] = useState('')
+  const [addingCat, setAddingCat] = useState(false)
+  const [editingCatId, setEditingCatId] = useState(null)
+  const [editEmoji, setEditEmoji] = useState('')
+  const [editName, setEditName] = useState('')
   const shareLink = `${window.location.origin}?h=${householdId}`
   useEffect(() => { checkPush() }, [])
   const checkPush = async () => {
@@ -480,6 +508,27 @@ function SettingsTab({ alertDays, onAlertChange, householdId, onSwitchHousehold 
       else { setCodeError('해당 코드의 냉장고를 찾을 수 없습니다') }
     } catch { setCodeError('연결에 실패했습니다') } finally { setCodeLoading(false) }
   }
+  const handleAddCategory = async () => {
+    const trimmed = newName.trim()
+    if (!trimmed) { alert('카테고리 이름을 입력해주세요'); return }
+    const fixedNames = CATS.filter(c => c !== '기타').map(c => c.split(' ').slice(1).join(' '))
+    const customNames = customCategories.map(c => c.name)
+    if ([...fixedNames, ...customNames].includes(trimmed)) { alert('이미 있는 카테고리예요'); return }
+    setAddingCat(true)
+    try { await onAddCategory({ emoji: newEmoji, name: trimmed }); setNewName('') } finally { setAddingCat(false) }
+  }
+  const handleStartRename = (cat) => { setEditingCatId(cat.id); setEditEmoji(cat.emoji); setEditName(cat.name) }
+  const handleSaveRename = async (cat) => {
+    const trimmed = editName.trim()
+    if (!trimmed) { alert('카테고리 이름을 입력해주세요'); return }
+    await onRenameCategory(cat, { emoji: editEmoji, name: trimmed })
+    setEditingCatId(null)
+  }
+  const handleDeleteCategory = (cat) => {
+    if (window.confirm(`"${cat.emoji} ${cat.name}" 카테고리를 삭제할까요?\n이 카테고리로 등록된 제품은 그대로 남고, "전체" 탭에서 계속 보여요.`)) {
+      onDeleteCategory(cat)
+    }
+  }
   const PushRow = () => {
     if (pushStatus === 'loading') return <div style={{ fontSize: 13, color: '#aaa' }}>알림 상태 확인 중...</div>
     if (pushStatus === 'unsupported') return <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.6 }}>이 브라우저는 푸시 알림을 지원하지 않습니다.</div>
@@ -495,6 +544,62 @@ function SettingsTab({ alertDays, onAlertChange, householdId, onSwitchHousehold 
   return (
     <div>
       <div style={{ fontSize: 16, fontWeight: 500, color: '#111', marginBottom: 14 }}>설정</div>
+      <div style={S.card}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: '#111', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 5 }}><i className="ti ti-tag" style={{ fontSize: 15 }} aria-hidden="true" />카테고리 관리</div>
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.6 }}>나만의 카테고리를 추가하고 관리하세요</div>
+        {customCategories.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#aaa', marginBottom: 12 }}>아직 추가한 카테고리가 없어요</div>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            {customCategories.map(cat => (
+              <div key={cat.id} style={{ padding: '8px 0', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
+                {editingCatId === cat.id ? (
+                  <div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
+                      {EMOJI_PRESETS.map(e => (
+                        <button key={e} onClick={() => setEditEmoji(e)}
+                          style={{ width: 32, height: 32, borderRadius: 8, border: `1.5px solid ${editEmoji === e ? '#111' : 'rgba(0,0,0,0.15)'}`, background: editEmoji === e ? '#111' : '#fff', fontSize: 15, cursor: 'pointer' }}>
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                    <input value={editName} onChange={e => setEditName(e.target.value)} style={{ ...S.input, marginBottom: 8 }} />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => setEditingCatId(null)} style={{ ...S.btnSecondary, flex: 1 }}>취소</button>
+                      <button onClick={() => handleSaveRename(cat)} style={{ ...S.btnPrimary, flex: 1 }}>저장</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: '#111' }}>{cat.emoji} {cat.name}</span>
+                    <button onClick={() => handleStartRename(cat)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#aaa', display: 'flex' }}>
+                      <i className="ti ti-pencil" style={{ fontSize: 14 }} aria-hidden="true" />
+                    </button>
+                    <button onClick={() => handleDeleteCategory(cat)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#ccc', display: 'flex' }}>
+                      <i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
+          {EMOJI_PRESETS.map(e => (
+            <button key={e} onClick={() => setNewEmoji(e)}
+              style={{ width: 32, height: 32, borderRadius: 8, border: `1.5px solid ${newEmoji === e ? '#111' : 'rgba(0,0,0,0.15)'}`, background: newEmoji === e ? '#111' : '#fff', fontSize: 15, cursor: 'pointer' }}>
+              {e}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="새 카테고리 이름" style={{ ...S.input, flex: 1 }}
+            onKeyDown={e => e.key === 'Enter' && handleAddCategory()} />
+          <button onClick={handleAddCategory} disabled={addingCat} style={{ ...S.btnPrimary, padding: '0 16px', opacity: addingCat ? 0.6 : 1 }}>
+            {addingCat ? '추가 중...' : '추가'}
+          </button>
+        </div>
+      </div>
       <div style={S.card}>
         <div style={{ fontSize: 13, fontWeight: 500, color: '#111', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 5 }}><i className="ti ti-users" style={{ fontSize: 15 }} aria-hidden="true" />가족 초대 링크</div>
         <div style={{ fontSize: 11, color: '#888', marginBottom: 8, lineHeight: 1.6 }}>이 링크를 북마크해두면 코드 없이 항상 자동 접속됩니다</div>
@@ -556,6 +661,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   const [showWelcome, setShowWelcome] = useState(false)
+  const [customCategories, setCustomCategories] = useState([])
   const hidRef = useRef('')
 
   const fetchProducts = useCallback(async (hid) => {
@@ -565,6 +671,12 @@ export default function App() {
       const { data, error } = await supabase.from('products').select('*').eq('household_id', id).order('expiry_date')
       if (!error && data) setProducts(data.map(p => ({ ...p, expiryDate: p.expiry_date, addedAt: p.added_at })))
     } finally { setSyncing(false) }
+  }, [])
+
+  const fetchCategories = useCallback(async (hid) => {
+    const id = hid || hidRef.current; if (!id) return
+    const { data, error } = await supabase.from('categories').select('*').eq('household_id', id).order('created_at')
+    if (!error && data) setCustomCategories(data)
   }, [])
 
   const setupHousehold = useCallback(async (code) => {
@@ -577,9 +689,9 @@ export default function App() {
       const saved = localStorage.getItem(`alertDays_${code}`)
       if (saved) setAlertDays(Number(saved))
       setShowWelcome(false)
-      await fetchProducts(code)
+      await Promise.all([fetchProducts(code), fetchCategories(code)])
     } catch (e) { console.error(e); setAppError('서버 연결에 실패했습니다.') }
-  }, [fetchProducts])
+  }, [fetchProducts, fetchCategories])
 
   const init = useCallback(async () => {
     try {
@@ -612,15 +724,25 @@ export default function App() {
 
   useEffect(() => {
     if (!householdId) return
-    const t = setInterval(() => fetchProducts(hidRef.current), 10000)
-    return () => clearInterval(t)
-  }, [householdId, fetchProducts])
+    const ch = supabase.channel('categories-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, (payload) => {
+        const changedHid = payload.new?.household_id || payload.old?.household_id
+        if (changedHid === hidRef.current) fetchCategories(hidRef.current)
+      }).subscribe()
+    return () => supabase.removeChannel(ch)
+  }, [householdId, fetchCategories])
 
   useEffect(() => {
-    const fn = () => { if (document.visibilityState === 'visible' && hidRef.current) fetchProducts(hidRef.current) }
+    if (!householdId) return
+    const t = setInterval(() => { fetchProducts(hidRef.current); fetchCategories(hidRef.current) }, 10000)
+    return () => clearInterval(t)
+  }, [householdId, fetchProducts, fetchCategories])
+
+  useEffect(() => {
+    const fn = () => { if (document.visibilityState === 'visible' && hidRef.current) { fetchProducts(hidRef.current); fetchCategories(hidRef.current) } }
     document.addEventListener('visibilitychange', fn)
     return () => document.removeEventListener('visibilitychange', fn)
-  }, [fetchProducts])
+  }, [fetchProducts, fetchCategories])
 
   const addProduct = async (form) => {
     const row = { id: genId(), household_id: hidRef.current, name: form.name, storage: form.storage, category: form.category, expiry_date: form.expiryDate, quantity_type: form.quantityType, quantity: form.quantityType === 'count' ? form.quantity : 1, remaining: form.quantityType === 'percent' ? form.remaining : 100 }
@@ -650,6 +772,34 @@ export default function App() {
 
   const updateAlertDays = (d) => { setAlertDays(d); localStorage.setItem(`alertDays_${hidRef.current}`, d) }
 
+  const addCategory = async ({ emoji, name }) => {
+    const trimmed = name.trim()
+    if (!trimmed) { alert('카테고리 이름을 입력해주세요'); return }
+    const { error } = await supabase.from('categories').insert({ id: genId(), household_id: hidRef.current, emoji, name: trimmed })
+    if (error) { alert('카테고리 추가에 실패했습니다.\n오류: ' + error.message); return }
+    await fetchCategories(hidRef.current)
+  }
+
+  const renameCategory = async (category, { emoji, name }) => {
+    const trimmed = name.trim()
+    const oldCombined = `${category.emoji} ${category.name}`
+    const newCombined = `${emoji} ${trimmed}`
+    const { error } = await supabase.from('categories').update({ emoji, name: trimmed }).eq('id', category.id)
+    if (error) { alert('카테고리 수정에 실패했습니다.\n오류: ' + error.message); return }
+    await supabase.from('products').update({ category: newCombined }).eq('household_id', hidRef.current).eq('category', oldCombined)
+    await Promise.all([fetchCategories(hidRef.current), fetchProducts(hidRef.current)])
+  }
+
+  const deleteCategory = async (category) => {
+    const { error } = await supabase.from('categories').delete().eq('id', category.id)
+    if (error) { alert('카테고리 삭제에 실패했습니다.\n오류: ' + error.message); return }
+    await fetchCategories(hidRef.current)
+  }
+
+  const goToCategoryManage = () => { setEditingProduct(null); setTab('settings') }
+
+  const categoryOptions = buildCategoryOptions(customCategories)
+
   const TABS = [{ id: 'home', icon: 'ti-home', lbl: '홈' }, { id: 'add', icon: 'ti-plus', lbl: '등록' }, { id: 'settings', icon: 'ti-settings', lbl: '설정' }]
 
   if (showWelcome) return <WelcomeScreen onEnterCode={setupHousehold} onCreateNew={() => setupHousehold(genCode())} />
@@ -669,10 +819,10 @@ export default function App() {
         <div style={{ marginLeft: 'auto', fontSize: 10, color: '#999', background: '#f0f0f0', padding: '2px 9px', borderRadius: 20, border: '0.5px solid rgba(0,0,0,0.1)', letterSpacing: 1.5, fontWeight: 500 }}>#{householdId}</div>
       </div>
       <div style={S.content}>
-        {tab === 'home' && <HomeTab products={products} alertDays={alertDays} onDel={deleteProduct} onQty={updateQty} onEdit={setEditingProduct} onGoAdd={() => setTab('add')} onRefresh={() => fetchProducts(hidRef.current)} syncing={syncing} />}
+        {tab === 'home' && <HomeTab products={products} alertDays={alertDays} onDel={deleteProduct} onQty={updateQty} onEdit={setEditingProduct} onGoAdd={() => setTab('add')} onRefresh={() => fetchProducts(hidRef.current)} syncing={syncing} categoryOptions={categoryOptions} />}
         {/* ✅ 수정: onCancel={() => setTab('home')} 전달 */}
-        {tab === 'add' && <AddTab onAdd={addProduct} onCancel={() => setTab('home')} />}
-        {tab === 'settings' && <SettingsTab alertDays={alertDays} onAlertChange={updateAlertDays} householdId={householdId} onSwitchHousehold={switchHousehold} />}
+        {tab === 'add' && <AddTab onAdd={addProduct} onCancel={() => setTab('home')} categoryOptions={categoryOptions} onGoToCategoryManage={goToCategoryManage} />}
+        {tab === 'settings' && <SettingsTab alertDays={alertDays} onAlertChange={updateAlertDays} householdId={householdId} onSwitchHousehold={switchHousehold} customCategories={customCategories} onAddCategory={addCategory} onRenameCategory={renameCategory} onDeleteCategory={deleteCategory} />}
       </div>
       <div style={S.nav}>
         {TABS.map(t => (
@@ -693,6 +843,7 @@ export default function App() {
             <ProductForm
               initial={{ name: editingProduct.name, storage: editingProduct.storage ?? '냉장', category: editingProduct.category ?? '', expiryDate: editingProduct.expiryDate, quantityType: editingProduct.quantity_type ?? 'count', quantity: editingProduct.quantity, remaining: editingProduct.remaining ?? 100 }}
               onSubmit={saveProduct} onCancel={() => setEditingProduct(null)} submitLabel="수정 저장" showScan={false}
+              categoryOptions={categoryOptions} onGoToCategoryManage={goToCategoryManage}
             />
           </div>
         </div>
